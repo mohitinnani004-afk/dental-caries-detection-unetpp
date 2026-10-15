@@ -291,3 +291,131 @@ def build_unet_plus_plus(
         use_attention=use_attention,
         dropout_rate=dropout_rate
     )
+
+
+class ColabConvBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
+
+class ColabUNetPlusPlus(nn.Module):
+    """
+    Exact U-Net++ architecture trained in the Colab session with base=16 channels.
+    Layers: x00, x10, x20, x30, x40, x01, x11, x21, x31, x02, x12, x22, x03, x13, x04, final.
+    """
+    def __init__(self, in_channels: int = 1, out_channels: int = 1, base: int = 16):
+        super().__init__()
+        self.pool = nn.MaxPool2d(kernel_size=2)
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+
+        # Encoder
+        self.x00 = ColabConvBlock(in_channels, base)
+        self.x10 = ColabConvBlock(base, base * 2)
+        self.x20 = ColabConvBlock(base * 2, base * 4)
+        self.x30 = ColabConvBlock(base * 4, base * 8)
+        self.x40 = ColabConvBlock(base * 8, base * 16)
+
+        # First nested decoder level
+        self.x01 = ColabConvBlock(base * 3, base)
+        self.x11 = ColabConvBlock(base * 6, base * 2)
+        self.x21 = ColabConvBlock(base * 12, base * 4)
+        self.x31 = ColabConvBlock(base * 24, base * 8)
+
+        # Second nested decoder level
+        self.x02 = ColabConvBlock(base * 4, base)
+        self.x12 = ColabConvBlock(base * 8, base * 2)
+        self.x22 = ColabConvBlock(base * 16, base * 4)
+
+        # Third nested decoder level
+        self.x03 = ColabConvBlock(base * 5, base)
+        self.x13 = ColabConvBlock(base * 10, base * 2)
+
+        # Fourth nested decoder level
+        self.x04 = ColabConvBlock(base * 6, base)
+
+        # Output layer
+        self.final = nn.Conv2d(base, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x00 = self.x00(x)
+        x10 = self.x10(self.pool(x00))
+        x20 = self.x20(self.pool(x10))
+        x30 = self.x30(self.pool(x20))
+        x40 = self.x40(self.pool(x30))
+
+        x01 = self.x01(torch.cat([x00, self.up(x10)], dim=1))
+        x11 = self.x11(torch.cat([x10, self.up(x20)], dim=1))
+        x21 = self.x21(torch.cat([x20, self.up(x30)], dim=1))
+        x31 = self.x31(torch.cat([x30, self.up(x40)], dim=1))
+
+        x02 = self.x02(torch.cat([x00, x01, self.up(x11)], dim=1))
+        x12 = self.x12(torch.cat([x10, x11, self.up(x21)], dim=1))
+        x22 = self.x22(torch.cat([x20, x21, self.up(x31)], dim=1))
+
+        x03 = self.x03(torch.cat([x00, x01, x02, self.up(x12)], dim=1))
+        x13 = self.x13(torch.cat([x10, x11, x12, self.up(x22)], dim=1))
+
+        x04 = self.x04(torch.cat([x00, x01, x02, x03, self.up(x13)], dim=1))
+        return self.final(x04)
+
+
+def load_unet_plus_plus_checkpoint(
+    checkpoint_path: Union[str, Path],
+    device: Optional[torch.device] = None
+) -> Tuple[nn.Module, dict]:
+    """
+    Intelligently inspects checkpoint state_dict and instantiates the exact
+    matching UNet++ architecture (Colab x00-style vs Full Deep Supervision style).
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    ckpt_path = Path(checkpoint_path)
+    state = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+    state_dict = state.get("model_state_dict", state) if isinstance(state, dict) else state
+
+    keys = list(state_dict.keys())
+    is_colab_format = any(k.startswith("x00") or k.startswith("x10") for k in keys)
+
+    if is_colab_format:
+        base = 16
+        for k in keys:
+            if "x00.block.0.weight" in k:
+                base = state_dict[k].shape[0]
+                break
+        model = ColabUNetPlusPlus(in_channels=1, out_channels=1, base=base)
+        model.load_state_dict(state_dict)
+        print(f"[OK] Instantiated and loaded Colab UNet++ architecture (base={base}) from {ckpt_path.name}")
+    else:
+        model = build_unet_plus_plus(
+            in_channels=1,
+            num_classes=1,
+            deep_supervision=True,
+            nb_filter=[32, 64, 128, 256, 512]
+        )
+        try:
+            model.load_state_dict(state_dict)
+            print(f"[OK] Loaded Full UNet++ architecture from {ckpt_path.name}")
+        except Exception:
+            model = build_unet_plus_plus(
+                in_channels=1,
+                num_classes=1,
+                deep_supervision=False,
+                nb_filter=[32, 64, 128, 256, 512]
+            )
+            model.load_state_dict(state_dict, strict=False)
+            print(f"[OK] Loaded UNet++ architecture (non-strict) from {ckpt_path.name}")
+
+    model = model.to(device)
+    model.eval()
+    return model, state if isinstance(state, dict) else {}
+

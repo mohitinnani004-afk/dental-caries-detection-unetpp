@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument("--checkpoint", type=str, default=str(CHECKPOINTS_DIR / "best_model.pth"), help="Path to checkpoint .pth")
     parser.add_argument("--data_dir", type=str, default=str(DATA_DIR / "dataset"), help="Path to dataset root")
     parser.add_argument("--output_dir", type=str, default=str(OUTPUTS_DIR / "evaluation"), help="Where to save results")
-    parser.add_argument("--threshold", type=float, default=0.50, help="Probability threshold for binarization")
+    parser.add_argument("--threshold", type=float, default=0.25, help="Probability threshold for binarization")
     parser.add_argument("--img_size", type=int, default=DEFAULT_DATA_CONFIG.image_size[0], help="Image size")
     return parser.parse_args()
 
@@ -48,27 +48,50 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=== Evaluating Dental Caries UNet++ on {device} ===")
 
-    # Initialize Model
-    model = build_unet_plus_plus(
-        in_channels=1,
-        num_classes=1,
-        deep_supervision=True,
-        nb_filter=[32, 64, 128, 256, 512]
-    )
+    # Robust Checkpoint Search
+    candidates = [
+        Path(args.checkpoint),
+        Path("/content/unetpp_bce_dice_best.pt"),
+        Path("/content/unetplusplus_completed.pth"),
+        Path("/content/unetplusplus_best.pth"),
+        Path("/content/drive/MyDrive/dental_unetpp/unetpp_bce_dice_best.pt"),
+        Path("checkpoints/best_model.pth"),
+        CHECKPOINTS_DIR / "best_model.pth"
+    ]
+    
+    ckpt_path = None
+    for cand in candidates:
+        if cand.exists():
+            ckpt_path = cand
+            break
 
-    ckpt_path = Path(args.checkpoint)
-    if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device)
-        state_dict = state.get("model_state_dict", state) if isinstance(state, dict) else state
-        model.load_state_dict(state_dict)
-        epoch_info = state.get("epoch", "N/A") if isinstance(state, dict) else "N/A"
-        print(f"Loaded checkpoint from: {ckpt_path} (Trained Epoch {epoch_info})")
+    if ckpt_path is not None:
+        try:
+            from models.unet_plus_plus import load_unet_plus_plus_checkpoint
+            model, state = load_unet_plus_plus_checkpoint(ckpt_path, device=device)
+            epoch_info = state.get("epoch", "N/A") if isinstance(state, dict) else "N/A"
+            print(f"[OK] Successfully loaded trained weights from: {ckpt_path} (Epoch: {epoch_info})")
+        except Exception as e:
+            print(f"[WARN] Failed to load checkpoint {ckpt_path} ({e}). Falling back to fresh UNet++.")
+            model = build_unet_plus_plus(in_channels=1, num_classes=1, deep_supervision=False).to(device)
     else:
-        print(f"Warning: Checkpoint not found at {ckpt_path}. Evaluating with initial weights for pipeline validation.")
+        print(f"[WARN] Checkpoint not found at: {args.checkpoint}")
+        print("       Checked locations:", [str(c) for c in candidates[:5]])
+        print("       Tip: If stored in Google Drive, ensure drive is mounted: drive.mount('/content/drive')")
+        print("       Evaluating with initial weights for pipeline testing.")
+        model = build_unet_plus_plus(in_channels=1, num_classes=1, deep_supervision=False).to(device)
+
+    # Robust Data Directory Search (supports Colab /content/caries_unet)
+    data_dir = Path(args.data_dir)
+    if not data_dir.exists() or not any(data_dir.iterdir()):
+        colab_caries_dir = Path("/content/caries_unet")
+        if colab_caries_dir.exists():
+            data_dir = colab_caries_dir
+            print(f"[INFO] Using Colab dataset at: {data_dir}")
 
     # Dataloaders
     _, _, test_loader = create_dental_dataloaders(
-        data_dir=args.data_dir,
+        data_dir=str(data_dir),
         image_size=(args.img_size, args.img_size),
         batch_size=4
     )

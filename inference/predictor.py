@@ -35,25 +35,29 @@ class CariesPredictor:
         self.use_tta = use_tta
         self.detector = LesionDetector(min_area=15)
 
-        # Initialize Model
-        self.model = build_unet_plus_plus(
-            in_channels=1,
-            num_classes=1,
-            deep_supervision=True,
-            use_attention=True,
-            nb_filter=[32, 64, 128, 256, 512]
-        ).to(self.device)
-        self.model.eval()
-
+        # Initialize Model using intelligent checkpoint loader
         if checkpoint_path and Path(checkpoint_path).exists():
-            state = torch.load(checkpoint_path, map_location=self.device)
-            if "model_state_dict" in state:
-                self.model.load_state_dict(state["model_state_dict"])
-            else:
-                self.model.load_state_dict(state)
-            print(f"Loaded Caries UNet++ weights from: {checkpoint_path}")
+            try:
+                from models.unet_plus_plus import load_unet_plus_plus_checkpoint
+                self.model, _ = load_unet_plus_plus_checkpoint(checkpoint_path, device=self.device)
+                print(f"[OK] Loaded Caries UNet++ weights from: {checkpoint_path}")
+            except Exception as e:
+                print(f"[WARN] Failed loading checkpoint with helper ({e}); trying standard init.")
+                self.model = build_unet_plus_plus(
+                    in_channels=1,
+                    num_classes=1,
+                    deep_supervision=False,
+                    nb_filter=[32, 64, 128, 256, 512]
+                ).to(self.device)
         else:
+            self.model = build_unet_plus_plus(
+                in_channels=1,
+                num_classes=1,
+                deep_supervision=False,
+                nb_filter=[32, 64, 128, 256, 512]
+            ).to(self.device)
             print("Notice: No trained checkpoint supplied; using initialized weights.")
+        self.model.eval()
 
     @torch.no_grad()
     def predict(

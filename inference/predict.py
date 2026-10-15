@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument("--input", type=str, default=None, help="Path to input dental radiograph image or directory")
     parser.add_argument("--checkpoint", type=str, default=str(CHECKPOINTS_DIR / "best_model.pth"), help="Trained weights path")
     parser.add_argument("--output", type=str, default=str(OUTPUTS_DIR / "predictions"), help="Output directory")
-    parser.add_argument("--threshold", type=float, default=0.50, help="Probability threshold for lesion segmentation")
+    parser.add_argument("--threshold", type=float, default=0.25, help="Probability threshold for lesion segmentation")
     parser.add_argument("--no_clahe", action="store_true", help="Disable CLAHE preprocessing")
     parser.add_argument("--no_tta", action="store_true", help="Disable test-time augmentation")
     return parser.parse_args()
@@ -33,10 +33,26 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Checkpoint candidate search
+    candidates = [
+        Path(args.checkpoint),
+        Path("/content/unetpp_bce_dice_best.pt"),
+        Path("/content/unetplusplus_completed.pth"),
+        Path("/content/unetplusplus_best.pth"),
+        Path("/content/drive/MyDrive/dental_unetpp/unetpp_bce_dice_best.pt"),
+        Path("checkpoints/best_model.pth"),
+        CHECKPOINTS_DIR / "best_model.pth"
+    ]
+    resolved_ckpt = None
+    for cand in candidates:
+        if cand.exists():
+            resolved_ckpt = cand
+            break
+
     try:
         from inference.predictor import CariesPredictor
         predictor = CariesPredictor(
-            checkpoint_path=args.checkpoint if Path(args.checkpoint).exists() else None,
+            checkpoint_path=str(resolved_ckpt) if resolved_ckpt else None,
             threshold=args.threshold,
             apply_clahe=not args.no_clahe,
             use_tta=not args.no_tta
