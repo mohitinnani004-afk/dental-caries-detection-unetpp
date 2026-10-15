@@ -7,15 +7,19 @@ Usage:
 import argparse
 from pathlib import Path
 import sys
-import torch
+try:
+    import torch
+    from models.unet_plus_plus import build_unet_plus_plus
+    from evaluation.evaluator import Evaluator
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 # Ensure project root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import DEFAULT_DATA_CONFIG, OUTPUTS_DIR, CHECKPOINTS_DIR, DATA_DIR
-from models.unet_plus_plus import build_unet_plus_plus
 from data.dataset import create_dental_dataloaders
-from evaluation.evaluator import Evaluator
 
 
 def parse_args():
@@ -30,6 +34,17 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if not TORCH_AVAILABLE:
+        print("\n" + "=" * 65)
+        print("  UNet++ EVALUATION NOTICE")
+        print("=" * 65)
+        print("[INFO] PyTorch is required to run neural network evaluation.")
+        print("To evaluate your trained checkpoint:")
+        print("  1. In Google Colab: Run Cell 8 in notebooks/dental_caries_colab_training.ipynb")
+        print("  2. Locally: Run 'pip install torch torchvision' in your virtual environment.")
+        print("=" * 65 + "\n")
+        return
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=== Evaluating Dental Caries UNet++ on {device} ===")
 
@@ -44,8 +59,10 @@ def main():
     ckpt_path = Path(args.checkpoint)
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(state["model_state_dict"])
-        print(f"Loaded checkpoint from: {ckpt_path} (Trained Epoch {state.get('epoch', 'N/A')})")
+        state_dict = state.get("model_state_dict", state) if isinstance(state, dict) else state
+        model.load_state_dict(state_dict)
+        epoch_info = state.get("epoch", "N/A") if isinstance(state, dict) else "N/A"
+        print(f"Loaded checkpoint from: {ckpt_path} (Trained Epoch {epoch_info})")
     else:
         print(f"Warning: Checkpoint not found at {ckpt_path}. Evaluating with initial weights for pipeline validation.")
 

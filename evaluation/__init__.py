@@ -1,6 +1,9 @@
 """
 Evaluation package for Dental Caries Detection.
 """
-from .evaluator import Evaluator
+try:
+    from .evaluator import Evaluator
+except ImportError:
+    Evaluator = None
 
 __all__ = ["Evaluator"]
