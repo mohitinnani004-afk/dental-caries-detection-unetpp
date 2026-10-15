@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dental Caries Detection & Segmentation | UNet++ Deep Learning System</title>
+  <meta name="description" content="State-of-the-art dental caries detection and segmentation using UNet++ (Nested U-Net) architecture with deep supervision and clinical lesion analysis.">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦷</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header Section -->
+    <header>
+      <div class="brand-section">
+        <div class="brand-icon">🦷</div>
+        <div>
+          <h1>Dental Caries Detection & Lesion Segmentation</h1>
+          <div class="subtitle">
+            <span>Nested U-Net (UNet++) Architecture</span>
+            <span class="model-badge">Deep Supervision L1–L4</span>
+            <span class="model-badge" style="background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.3); color: #10b981;">Attention Gated</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-architecture-modal" class="btn-secondary" aria-label="Open model architecture details">
+          <span>🧠</span> Architecture Insights
+        </button>
+        <button id="btn-export-report" class="btn-secondary" aria-label="Export diagnostic JSON report">
+          <span>📥</span> Export Findings
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="main-grid">
+      <!-- Left Column: Controls & Radiograph Inputs -->
+      <section class="left-column" aria-label="Radiograph inputs and threshold controls">
+        <!-- Input Radiograph Card -->
+        <div class="glass-card">
+          <div class="card-title">
+            <span>Dental Radiograph Source</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Bitewing / Periapical</span>
+          </div>
+
+          <!-- Drag and Drop Upload -->
+          <div id="dropzone" class="upload-zone" tabindex="0" role="button" aria-label="Upload dental X-ray image">
+            <input type="file" id="file-input" accept="image/*" style="display: none;" aria-hidden="true">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">Drag & drop dental X-ray or click to upload</div>
+            <div class="upload-hint">Supports PNG, JPG, JPEG, TIFF (Max 15MB)</div>
+          </div>
+
+          <!-- Preloaded Clinical Samples -->
+          <div style="margin-top: 18px;">
+            <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">
+              Or Select Verified Clinical Sample:
+            </span>
+            <div class="sample-list" id="sample-list" role="listbox" aria-label="Select sample dental radiograph">
+              <div class="sample-item active" data-sample-id="sample_proximal" role="option" aria-selected="true" tabindex="0">
+                <div class="sample-info">
+                  <span class="sample-name">Sample #1: Interproximal Caries</span>
+                  <span class="sample-desc">Molar proximal contact demineralization</span>
+                </div>
+                <span class="sample-tag caries">Dentin D1</span>
+              </div>
+              <div class="sample-item" data-sample-id="sample_occlusal" role="option" aria-selected="false" tabindex="0">
+                <div class="sample-info">
+                  <span class="sample-name">Sample #2: Occlusal Fissure Caries</span>
+                  <span class="sample-desc">Coronal fissure cavity on crown surface</span>
+                </div>
+                <span class="sample-tag caries">Enamel E2</span>
+              </div>
+              <div class="sample-item" data-sample-id="sample_deep" role="option" aria-selected="false" tabindex="0">
+                <div class="sample-info">
+                  <span class="sample-name">Sample #3: Deep Cervical Caries</span>
+                  <span class="sample-desc">Subgingival lesion near cementoenamel junction</span>
+                </div>
+                <span class="sample-tag caries">Deep D3 / Pulp Risk</span>
+              </div>
+              <div class="sample-item" data-sample-id="sample_healthy" role="option" aria-selected="false" tabindex="0">
+                <div class="sample-info">
+                  <span class="sample-name">Sample #4: Healthy Control Teeth</span>
+                  <span class="sample-desc">Intact enamel crowns & normal trabecular bone</span>
+                </div>
+                <span class="sample-tag healthy">Clear (0 Caries)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Diagnostic Sensitivity / Threshold Slider -->
+        <div class="glass-card">
+          <div class="card-title">
+            <span>Detection Sensitivity (Threshold)</span>
+            <span id="threshold-val-badge" class="slider-val">0.50</span>
+          </div>
+          <div class="slider-container">
+            <div class="slider-header">
+              <span style="color: var(--text-muted); font-size: 0.75rem;">High Sensitivity (Screening)</span>
+              <span style="color: var(--text-muted); font-size: 0.75rem;">High Specificity (Conservative)</span>
+            </div>
+            <input type="range" id="threshold-slider" min="0.10" max="0.90" step="0.05" value="0.50" aria-label="Probability threshold slider">
+            
+            <div class="preset-pills">
+              <button class="pill-btn" data-thresh="0.30" id="btn-thresh-screening">Screening (0.30)</button>
+              <button class="pill-btn active" data-thresh="0.50" id="btn-thresh-balanced">Balanced (0.50)</button>
+              <button class="pill-btn" data-thresh="0.70" id="btn-thresh-specific">Specific (0.70)</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- UNet++ Technical Specs Card -->
+        <div class="glass-card">
+          <div class="card-title">
+            <span>UNet++ Architectural Highlights</span>
+          </div>
+          <ul class="tech-spec-list">
+            <li class="tech-spec-item">
+              <span class="tech-icon">✦</span>
+              <span><strong>Nested Skip Pathways:</strong> Captures fine enamel fissures without semantic gap.</span>
+            </li>
+            <li class="tech-spec-item">
+              <span class="tech-icon">✦</span>
+              <span><strong>Deep Supervision:</strong> Direct gradient backpropagation at heads $L_1, L_2, L_3, L_4$.</span>
+            </li>
+            <li class="tech-spec-item">
+              <span class="tech-icon">✦</span>
+              <span><strong>Attention Gates:</strong> Suppresses jawbone trabeculae & metal artifact interference.</span>
+            </li>
+            <li class="tech-spec-item">
+              <span class="tech-icon">✦</span>
+              <span><strong>Hybrid Combo Loss:</strong> Joint $\alpha\text{BCE} + (1-\alpha)\text{Dice}$ handles severe pixel class imbalance.</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Right Column: Radiograph Viewport & Clinical Findings -->
+      <section class="right-column" aria-label="Radiograph viewer and diagnostic findings">
+        <!-- Status Banner -->
+        <div id="status-banner" class="status-banner">
+          <div class="status-left">
+            <div class="status-pulse"></div>
+            <div>
+              <div id="status-title" class="status-title">Dental Caries Identified</div>
+              <div id="status-subtitle" style="font-size: 0.78rem; color: var(--text-secondary);">
+                Radiographic demineralization detected requiring restorative assessment.
+              </div>
+            </div>
+          </div>
+          <div id="status-risk-badge" class="model-badge" style="background: rgba(255, 71, 87, 0.2); border-color: #ff4757; color: #ff6b81;">
+            Moderate Risk
+          </div>
+        </div>
+
+        <!-- Metric Cards Row -->
+        <div class="metric-row">
+          <div class="metric-card accent-coral">
+            <div class="metric-label">Detected Lesions</div>
+            <div id="metric-lesion-count" class="metric-number">1</div>
+          </div>
+          <div class="metric-card accent-amber">
+            <div class="metric-label">Highest Severity</div>
+            <div id="metric-highest-severity" class="metric-number" style="font-size: 1.15rem; margin-top: 4px;">D1 (Dentin)</div>
+          </div>
+          <div class="metric-card accent-cyan">
+            <div class="metric-label">Affected Area</div>
+            <div id="metric-affected-area" class="metric-number">0.96 mm²</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Mean Confidence</div>
+            <div id="metric-max-confidence" class="metric-number">88%</div>
+          </div>
+        </div>
+
+        <!-- Viewport Panel with Mode Tabs -->
+        <div class="viewport-panel">
+          <div class="tab-bar" role="tablist">
+            <button class="tab-btn active" data-view="composite" role="tab" id="tab-composite" aria-selected="true">
+              <span>🎯</span> Clinical Overlay
+            </button>
+            <button class="tab-btn" data-view="heatmap" role="tab" id="tab-heatmap" aria-selected="false">
+              <span>🔥</span> Probability Heatmap
+            </button>
+            <button class="tab-btn" data-view="clahe" role="tab" id="tab-clahe" aria-selected="false">
+              <span>✨</span> CLAHE Enhanced
+            </button>
+            <button class="tab-btn" data-view="dual" role="tab" id="tab-dual" aria-selected="false">
+              <span>⚖️</span> Side-by-Side Dual
+            </button>
+          </div>
+
+          <div class="image-canvas-container">
+            <div id="loading-spinner" class="spinner"></div>
+
+            <!-- Single view display -->
+            <img id="main-radiograph-view" class="radiograph-display" src="" alt="Dental radiograph caries segmentation analysis" style="display: block;">
+
+            <!-- Dual view display -->
+            <div id="dual-view-container" class="dual-view-container">
+              <div class="dual-card">
+                <div class="dual-label">Original X-Ray</div>
+                <img id="dual-img-orig" class="dual-img" src="" alt="Original radiograph">
+              </div>
+              <div class="dual-card">
+                <div class="dual-label">UNet++ Segmented Overlay</div>
+                <img id="dual-img-pred" class="dual-img" src="" alt="Segmented overlay">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lesion Findings Breakdown Table -->
+        <div class="glass-card">
+          <div class="card-title">
+            <span>Detailed Radiographic Lesion Findings</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);" id="lesion-findings-count">Showing 1 lesion</span>
+          </div>
+          <div class="table-container">
+            <table id="lesion-table" aria-label="Table of detected dental caries lesions">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Anatomical Site</th>
+                  <th>Radiographic Depth</th>
+                  <th>Confidence</th>
+                  <th>Area</th>
+                  <th>Clinical Recommendation</th>
+                </tr>
+              </thead>
+              <tbody id="lesion-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Action Footer -->
+        <div class="action-footer">
+          <button id="btn-print" class="btn-secondary">
+            <span>🖨️</span> Print Clinical Sheet
+          </button>
+          <button id="btn-download-overlay" class="btn-primary">
+            <span>💾</span> Download Annotated X-Ray
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Architecture Modal -->
+  <div id="architecture-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-arch-title">
+    <div class="modal-content">
+      <button id="btn-close-modal" class="modal-close" aria-label="Close modal">&times;</button>
+      <h2 id="modal-arch-title" style="font-family: 'Outfit', sans-serif; font-size: 1.35rem; margin-bottom: 12px; color: #fff;">
+        Why UNet++ for Dental Caries Detection?
+      </h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 16px;">
+        Dental caries appear as subtle radiolucent shadows in teeth with high intra-class variance and faint boundaries. Traditional U-Net architecture suffers from a semantic gap between raw encoder feature maps and high-level decoder feature maps.
+      </p>
+      
+      <div style="background: rgba(0, 0, 0, 0.4); padding: 14px; border-radius: 8px; border: 1px solid var(--border-subtle); margin-bottom: 16px;">
+        <h3 style="font-size: 0.90rem; color: var(--accent-cyan); margin-bottom: 6px;">Key Architectural Advantages:</h3>
+        <ul style="font-size: 0.80rem; color: var(--text-secondary); list-style: square; padding-left: 20px; line-height: 1.6;">
+          <li><strong>Nested Dense Pathways:</strong> Intermediate convolution nodes $X^{i,j}$ accumulate dense multi-scale context, preserving fine enamel boundary details.</li>
+          <li><strong>Deep Supervision:</strong> Auxiliary losses at nodes $X^{0,1}, X^{0,2}, X^{0,3}, X^{0,4}$ force intermediate feature maps to be semantically discriminative.</li>
+          <li><strong>Runtime Model Pruning:</strong> Allows choosing between ultra-fast screening ($L_1$) or full-depth precision ($L_4$).</li>
+        </ul>
+      </div>
+
+      <div style="text-align: right;">
+        <button id="btn-close-modal-bottom" class="btn-primary" style="padding: 8px 16px; font-size: 0.82rem;">Understood</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

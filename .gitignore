@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.env
+
+# Checkpoint model weights (large binaries)
+checkpoints/*.pth
+checkpoints/*.pt
+!checkpoints/.gitkeep
+
+# Outputs and logs
+outputs/
+*.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Web uploads
+web_app/uploads/*
+!web_app/uploads/.gitkeep
