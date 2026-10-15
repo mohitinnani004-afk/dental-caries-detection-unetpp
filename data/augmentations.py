@@ -54,14 +54,14 @@ class DentalRadiographAugmenter:
         if self.is_train:
             # Random horizontal flip
             if random.random() < self.p_hflip:
-                image = TF.hflip(image)
-                mask = TF.hflip(mask)
+                image = image.transpose(Image.FLIP_LEFT_RIGHT)
+                mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
 
             # Random subtle rotation
             if random.random() < self.p_rotation:
                 angle = random.uniform(-self.max_rotation_deg, self.max_rotation_deg)
-                image = TF.rotate(image, angle, interpolation=TF.InterpolationMode.BILINEAR, fill=0)
-                mask = TF.rotate(mask, angle, interpolation=TF.InterpolationMode.NEAREST, fill=0)
+                image = image.rotate(angle, resample=Image.BILINEAR, fillcolor=0)
+                mask = mask.rotate(angle, resample=Image.NEAREST, fillcolor=0)
 
             # Photometric augmentations (image only, not mask)
             if random.random() < self.p_contrast:
@@ -77,20 +77,30 @@ class DentalRadiographAugmenter:
             if random.random() < self.p_blur:
                 image = image.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.3, 0.8)))
 
-        # Convert to Tensors
-        # Image: [1, H, W] in range [0.0, 1.0]
-        img_tensor = TF.to_tensor(image)
-        if img_tensor.shape[0] > 1:
-            # Convert RGB to Grayscale
-            img_tensor = img_tensor[0:1, :, :]
+        # Convert to Tensors or NumPy arrays
+        if TORCH_AVAILABLE and TF is not None:
+            # Image: [1, H, W] in range [-1.0, 1.0]
+            img_tensor = TF.to_tensor(image)
+            if img_tensor.shape[0] > 1:
+                img_tensor = img_tensor[0:1, :, :]
 
-        # Mask: [1, H, W] binary float {0.0, 1.0}
-        mask_tensor = TF.to_tensor(mask)
-        if mask_tensor.shape[0] > 1:
-            mask_tensor = mask_tensor[0:1, :, :]
-        mask_tensor = (mask_tensor > 0.5).float()
+            # Mask: [1, H, W] binary float {0.0, 1.0}
+            mask_tensor = TF.to_tensor(mask)
+            if mask_tensor.shape[0] > 1:
+                mask_tensor = mask_tensor[0:1, :, :]
+            mask_tensor = (mask_tensor > 0.5).float()
 
-        # Standardize radiograph intensity (zero mean, unit variance or [0, 1])
-        img_tensor = (img_tensor - 0.5) / 0.5
-
-        return img_tensor, mask_tensor
+            # Standardize radiograph intensity (zero mean, unit variance [-1.0, 1.0])
+            img_tensor = (img_tensor - 0.5) / 0.5
+            return img_tensor, mask_tensor
+        else:
+            # Standalone NumPy array fallback: [1, H, W]
+            import numpy as np
+            img_np = np.array(image, dtype=np.float32) / 255.0
+            img_np = (img_np - 0.5) / 0.5
+            mask_np = (np.array(mask, dtype=np.float32) > 127.0).astype(np.float32)
+            if img_np.ndim == 2:
+                img_np = img_np[np.newaxis, :, :]
+            if mask_np.ndim == 2:
+                mask_np = mask_np[np.newaxis, :, :]
+            return img_np, mask_np
