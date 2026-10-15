@@ -2,6 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg)](https://pytorch.org/)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mohitinnani004-afk/dental-caries-detection-unetpp/blob/main/notebooks/dental_caries_colab_training.ipynb)
 [![Architecture](https://img.shields.io/badge/Architecture-UNet%2B%2B%20(Nested%20U--Net)-brightgreen.svg)](https://arxiv.org/abs/1807.10165)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
