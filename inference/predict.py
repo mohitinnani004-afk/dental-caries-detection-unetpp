@@ -96,6 +96,7 @@ def main():
             input_targets = []
             for ext in exts:
                 input_targets.extend(sorted(in_path.glob(ext)))
+            input_targets = [p for p in input_targets if not p.name.startswith("mask_")]
 
     print(f"Running inference on {len(input_targets)} radiograph(s)...")
 
