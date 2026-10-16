@@ -5,14 +5,21 @@ Unit tests for dental caries loss functions and metrics.
 from pathlib import Path
 import sys
 import unittest
-import torch
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from models.losses import DiceLoss, FocalLoss, BCEDiceLoss, DeepSupervisionLoss
-from models.metrics import MetricTracker, dice_coefficient, iou_score
+if TORCH_AVAILABLE:
+    from models.losses import DiceLoss, FocalLoss, BCEDiceLoss, DeepSupervisionLoss
+    from models.metrics import MetricTracker, dice_coefficient, iou_score
 
 
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch required for neural net loss tests")
 class TestLossesAndMetrics(unittest.TestCase):
     def setUp(self):
         self.preds = torch.randn(4, 1, 64, 64)

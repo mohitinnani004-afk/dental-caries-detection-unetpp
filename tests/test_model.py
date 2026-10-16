@@ -5,13 +5,20 @@ Unit tests for UNet++ (Nested U-Net) Architecture.
 from pathlib import Path
 import sys
 import unittest
-import torch
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from models.unet_plus_plus import UNetPlusPlus, build_unet_plus_plus
+if TORCH_AVAILABLE:
+    from models.unet_plus_plus import UNetPlusPlus, build_unet_plus_plus
 
 
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch required for neural net model tests")
 class TestUNetPlusPlus(unittest.TestCase):
     def setUp(self):
         self.device = torch.device("cpu")
