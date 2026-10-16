@@ -54,22 +54,43 @@ class StandaloneCariesEngine:
             blurred = ground_truth_mask.filter(ImageFilter.GaussianBlur(radius=2.5))
             prob_map = (np.array(blurred, dtype=np.float32) / 255.0) * 0.95
         else:
-            # Custom uploaded image: compute radiolucent cavity defect
-            min_v, max_v = img_np.min(), img_np.max()
-            norm_img = (img_np - min_v) / (max_v - min_v + 1e-6)
-            tooth_mask = norm_img > 0.45
-            prob_map = np.clip((0.70 - norm_img) * 1.6, 0.0, 0.95) * tooth_mask
+            # Custom uploaded radiograph (e.g. panoramic or bitewing):
+            # Compute localized focal radiolucency relative to surrounding tooth structures
+            local_blur_rad = max(4, int(min(w, h) * 0.02))
+            local_mean = gray.filter(ImageFilter.GaussianBlur(radius=local_blur_rad))
+            local_mean_np = np.array(local_mean, dtype=np.float32)
+
+            # Focal radiolucent drop: where pixel is darker than its immediate tooth neighborhood
+            focal_drop = np.clip((local_mean_np - img_np) / (local_mean_np + 1e-5), 0.0, 1.0)
+
+            # Tooth tissue mask: exclude air background (< 45) and extreme radiopaque metal/restorations (> 245)
+            tissue_mask = (img_np > 45) & (local_mean_np > 60) & (img_np < 240)
+
+            # Anatomical vertical ROI (for panoramic radiographs with aspect ratio > 1.3)
+            if w / max(h, 1) > 1.3:
+                y_coords = np.arange(h)[:, None]
+                # Teeth lie in the central vertical band (18% to 82% of height)
+                roi_vertical = (y_coords >= h * 0.18) & (y_coords <= h * 0.82)
+                tissue_mask = tissue_mask & roi_vertical
+
+            # Scaled probability map
+            prob_map = np.clip(focal_drop * 3.5, 0.0, 0.95) * tissue_mask
+
+        # Resolution-aware minimum lesion area (filters microscopic noise fragments)
+        min_area = max(45, int(w * h * 0.0004))
 
         # Binary mask from threshold
         binary_mask = (prob_map >= threshold).astype(np.uint8)
 
-        # Extract lesions using simple bounding box grouping
-        lesions = []
+        # Extract lesions using connected components
+        raw_candidates = []
         labeled, slices = self._connected_components(binary_mask)
         for idx, slc in enumerate(slices):
+            if slc is None:
+                continue
             comp = (labeled == (idx + 1))
             area = int(np.sum(comp))
-            if area < 15:
+            if area < min_area:
                 continue
 
             y_idx, x_idx = np.where(comp)
@@ -78,6 +99,32 @@ class StandaloneCariesEngine:
             bw, bh = x_max - x_min + 1, y_max - y_min + 1
             cx, cy = int(np.mean(x_idx)), int(np.mean(y_idx))
             conf = float(np.mean(prob_map[comp]))
+
+            # Filter low confidence noise
+            if conf < max(0.38, threshold):
+                continue
+
+            raw_candidates.append({
+                "bbox": [x_min, y_min, bw, bh],
+                "area": area,
+                "conf": conf,
+                "cx": cx,
+                "cy": cy
+            })
+
+        # Merge overlapping / adjacent boxes using Non-Maximum Suppression (NMS)
+        merged_candidates = self._merge_lesion_candidates(raw_candidates)
+
+        # Sort by clinical prominence (confidence * area) and take top 10 most significant findings
+        merged_candidates.sort(key=lambda c: c["conf"] * c["area"], reverse=True)
+        merged_candidates = merged_candidates[:10]
+
+        lesions = []
+        for i, c in enumerate(merged_candidates):
+            x_min, y_min, bw, bh = c["bbox"]
+            cx, cy = c["cx"], c["cy"]
+            area = c["area"]
+            conf = c["conf"]
 
             # Determine site
             rel_y = cy / h
@@ -88,18 +135,18 @@ class StandaloneCariesEngine:
             else:
                 site = "Proximal (Interproximal)"
 
-            # Severity
+            # Severity based on lesion size
             max_d = max(bw, bh)
-            if max_d <= 10:
+            if max_d <= 12:
                 sev = "E1 (Outer Enamel Caries)"
                 rec = "Remineralization therapy with topical fluoride."
-            elif max_d <= 16:
+            elif max_d <= 20:
                 sev = "E2 (Inner Enamel Caries)"
                 rec = "Resin infiltration or preventive monitoring."
-            elif max_d <= 24:
+            elif max_d <= 32:
                 sev = "D1 (Outer 1/3 Dentin Caries)"
                 rec = "Conservative composite restoration."
-            elif max_d <= 32:
+            elif max_d <= 48:
                 sev = "D2 (Middle 1/3 Dentin Caries)"
                 rec = "Restorative cavity preparation & excavation."
             else:
@@ -107,7 +154,7 @@ class StandaloneCariesEngine:
                 rec = "Endodontic evaluation; risk of pulpal exposure."
 
             lesions.append({
-                "id": len(lesions) + 1,
+                "id": i + 1,
                 "site": site,
                 "severity_grade": sev,
                 "confidence": round(conf, 3),
@@ -178,6 +225,42 @@ class StandaloneCariesEngine:
                     slices.append((slice(min_r, max_r + 1), slice(min_c, max_c + 1)))
 
         return labeled, slices
+
+    def _merge_lesion_candidates(self, candidates: list) -> list:
+        if not candidates:
+            return []
+        merged = []
+        remaining = list(candidates)
+        while remaining:
+            curr = remaining.pop(0)
+            has_merged = False
+            cx, cy, cw, ch = curr["bbox"]
+            for m in merged:
+                mx, my, mw, mh = m["bbox"]
+                # Compute intersection
+                ix1 = max(cx, mx)
+                iy1 = max(cy, my)
+                ix2 = min(cx + cw, mx + mw)
+                iy2 = min(cy + ch, my + mh)
+                if ix1 < ix2 and iy1 < iy2:
+                    inter_area = (ix2 - ix1) * (iy2 - iy1)
+                    min_box_area = min(cw * ch, mw * mh)
+                    if inter_area / max(min_box_area, 1) > 0.20:
+                        # Merge bounding boxes
+                        nx1 = min(cx, mx)
+                        ny1 = min(cy, my)
+                        nx2 = max(cx + cw, mx + mw)
+                        ny2 = max(cy + ch, my + mh)
+                        m["bbox"] = [nx1, ny1, nx2 - nx1, ny2 - ny1]
+                        m["area"] += curr["area"]
+                        m["conf"] = max(m["conf"], curr["conf"])
+                        m["cx"] = (nx1 + nx2) // 2
+                        m["cy"] = (ny1 + ny2) // 2
+                        has_merged = True
+                        break
+            if not has_merged:
+                merged.append(curr)
+        return merged
 
     def _render_composite_overlay(self, gray: Image.Image, prob_map: np.ndarray, binary_mask: np.ndarray, lesions: list) -> str:
         rgb = gray.convert("RGB")

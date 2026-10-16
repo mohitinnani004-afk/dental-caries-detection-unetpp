@@ -56,7 +56,9 @@ class LesionDetector:
 
         lesions: List[CariesLesion] = []
         img_h, img_w = image_shape
+        effective_min_area = max(self.min_area, int(img_h * img_w * 0.0004))
 
+        raw_candidates = []
         for i, s in enumerate(slices):
             if s is None:
                 continue
@@ -65,7 +67,7 @@ class LesionDetector:
             area = int(np.sum(comp_mask))
 
             # Filter out tiny noise specks
-            if area < self.min_area:
+            if area < effective_min_area:
                 continue
 
             # Bounding box
@@ -78,13 +80,37 @@ class LesionDetector:
             cx = int(np.mean(x_indices))
             cy = int(np.mean(y_indices))
 
+            # Anatomical ROI filter for panoramic radiographs (aspect ratio > 1.3)
+            # Caries cannot form in maxillary sinuses (top 18%) or mandibular cortical base (bottom 18%)
+            if img_w / max(img_h, 1) > 1.3:
+                if cy < img_h * 0.18 or cy > img_h * 0.82:
+                    continue
+
             # Average confidence inside lesion
             mean_prob = float(np.mean(probability_map[comp_mask]))
+            if mean_prob < 0.38:
+                continue
 
-            # Estimated real-world area in mm²
+            raw_candidates.append({
+                "bbox": bbox,
+                "area": area,
+                "conf": mean_prob,
+                "cx": cx,
+                "cy": cy
+            })
+
+        # Non-Maximum Suppression / Box Merging for overlapping detections
+        merged_candidates = self._merge_overlapping_candidates(raw_candidates)
+        merged_candidates.sort(key=lambda c: c["conf"] * c["area"], reverse=True)
+        merged_candidates = merged_candidates[:12]  # Cap at top 12 most prominent clinical findings
+
+        for i, cand in enumerate(merged_candidates):
+            bbox = cand["bbox"]
+            cx, cy = cand["cx"], cand["cy"]
+            area = cand["area"]
+            mean_prob = cand["conf"]
             area_mm2 = round(area * (self.pixel_pitch_mm ** 2), 2)
 
-            # Anatomical site and severity estimation
             site, severity, rec = self._classify_lesion_depth_and_site(
                 cx=cx,
                 cy=cy,
@@ -95,7 +121,7 @@ class LesionDetector:
             )
 
             lesion = CariesLesion(
-                id=len(lesions) + 1,
+                id=i + 1,
                 site=site,
                 severity_grade=severity,
                 confidence=round(mean_prob, 3),
@@ -108,6 +134,40 @@ class LesionDetector:
             lesions.append(lesion)
 
         return lesions
+
+    def _merge_overlapping_candidates(self, candidates: List[Dict]) -> List[Dict]:
+        if not candidates:
+            return []
+        merged = []
+        remaining = list(candidates)
+        while remaining:
+            curr = remaining.pop(0)
+            has_merged = False
+            cx, cy, cw, ch = curr["bbox"]
+            for m in merged:
+                mx, my, mw, mh = m["bbox"]
+                ix1 = max(cx, mx)
+                iy1 = max(cy, my)
+                ix2 = min(cx + cw, mx + mw)
+                iy2 = min(cy + ch, my + mh)
+                if ix1 < ix2 and iy1 < iy2:
+                    inter_area = (ix2 - ix1) * (iy2 - iy1)
+                    min_box = min(cw * ch, mw * mh)
+                    if inter_area / max(min_box, 1) > 0.20:
+                        nx1 = min(cx, mx)
+                        ny1 = min(cy, my)
+                        nx2 = max(cx + cw, mx + mw)
+                        ny2 = max(cy + ch, my + mh)
+                        m["bbox"] = (nx1, ny1, nx2 - nx1, ny2 - ny1)
+                        m["area"] += curr["area"]
+                        m["conf"] = max(m["conf"], curr["conf"])
+                        m["cx"] = (nx1 + nx2) // 2
+                        m["cy"] = (ny1 + ny2) // 2
+                        has_merged = True
+                        break
+            if not has_merged:
+                merged.append(curr)
+        return merged
 
     def _classify_lesion_depth_and_site(
         self,
