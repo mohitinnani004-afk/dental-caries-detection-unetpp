@@ -173,6 +173,7 @@ class StandaloneCariesEngine:
         total_pixels = int(np.sum(binary_mask))
         summary = {
             "caries_detected": len(lesions) > 0,
+            "caries_count": len(lesions),
             "lesion_count": len(lesions),
             "total_caries_pixels": total_pixels,
             "estimated_caries_area_mm2": round(total_pixels * (self.pixel_pitch_mm ** 2), 2),

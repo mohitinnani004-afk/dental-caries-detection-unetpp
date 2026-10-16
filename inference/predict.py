@@ -122,7 +122,7 @@ def main():
             "source_image": target.name,
             "annotated_result": annotated_path.name,
             "summary": summary,
-            "lesion_findings": lesions
+            "caries_detections": lesions
         }
         all_reports.append(report)
 
