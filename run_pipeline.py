@@ -79,12 +79,12 @@ def run_full_pipeline_demo():
         result = DIAGNOSTIC_ENGINE.analyze(img, threshold=0.50, ground_truth_mask=mask)
         summary = result["summary"]
         print(f"  * Caries Identified:  {summary['caries_detected']}")
-        print(f"  * Lesion Count:       {summary['lesion_count']}")
+        print(f"  * Caries Count:       {summary['lesion_count']}")
         print(f"  * Highest Severity:   {summary['highest_severity']}")
         print(f"  * Total Caries Area:  {summary['estimated_caries_area_mm2']} mm2")
         for lesion in result["lesions"]:
-            print(f"    - Lesion #{lesion['id']} [{lesion['site']}]: {lesion['severity_grade']}")
-        print("  [OK] Step 4 Complete: Clinical lesion findings extracted successfully!")
+            print(f"    - Caries #{lesion['id']} [{lesion['site']}]: {lesion['severity_grade']}")
+        print("  [OK] Step 4 Complete: Clinical caries findings extracted successfully!")
     except Exception as e:
         print(f"  [NOTE] Step 4 Note: {e}")
 

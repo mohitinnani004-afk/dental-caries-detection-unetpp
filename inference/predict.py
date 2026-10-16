@@ -126,12 +126,12 @@ def main():
         all_reports.append(report)
 
         print(f"\n[X-Ray Analysis]: {target.name}")
-        print(f"  Caries Detected:     {'YES' if summary['caries_detected'] else 'NO'}")
-        print(f"  Lesion Count:        {summary['lesion_count']}")
-        print(f"  Highest Severity:    {summary['highest_severity']}")
+        print(f"  Caries Detected:       {'YES' if summary['caries_detected'] else 'NO'}")
+        print(f"  Caries Count:          {summary['lesion_count']}")
+        print(f"  Highest Severity:      {summary['highest_severity']}")
         print(f"  Estimated Caries Area: {summary['estimated_caries_area_mm2']} mm²")
         for l in lesions:
-            print(f"   * Lesion #{l['id']} [{l['site']}]: {l['severity_grade']} (Conf: {int(l['confidence']*100)}%)")
+            print(f"   * Caries #{l['id']} [{l['site']}]: {l['severity_grade']} (Conf: {int(l['confidence']*100)}%)")
             print(f"     Rec: {l['clinical_recommendation']}")
 
     # Save consolidated JSON report

@@ -129,11 +129,11 @@ class StandaloneCariesEngine:
             # Determine site
             rel_y = cy / h
             if rel_y < 0.35:
-                site = "Occlusal Fissure"
+                site = "Occlusal Caries"
             elif rel_y > 0.65:
-                site = "Cervical / Root"
+                site = "Cervical / Root Caries"
             else:
-                site = "Proximal (Interproximal)"
+                site = "Proximal Caries"
 
             # Severity based on lesion size
             max_d = max(bw, bh)
@@ -287,9 +287,10 @@ class StandaloneCariesEngine:
             # Bounding box
             draw.rectangle([x - 2, y - 2, x + bw + 2, y + bh + 2], outline=col, width=2)
             # Tag label
-            tag_text = f"#{l['id']} {l['site'].split()[0]} ({int(l['confidence']*100)}%)"
+            tag_text = f"Caries #{l['id']} ({int(l['confidence']*100)}%)"
             ty = max(4, y - 18)
-            draw.rectangle([x - 2, ty, x + min(bw + 60, 140), ty + 16], fill=(15, 17, 26), outline=col, width=1)
+            tag_w = max(bw + 20, 140)
+            draw.rectangle([x - 2, ty, x + tag_w, ty + 16], fill=(15, 17, 26), outline=col, width=1)
             draw.text((x + 2, ty + 1), tag_text, fill=(255, 255, 255))
 
         buf = io.BytesIO()

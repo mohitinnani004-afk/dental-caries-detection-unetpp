@@ -187,11 +187,11 @@ class LesionDetector:
 
         # Anatomical site based on vertical and horizontal dental geometry
         if rel_y < 0.32:
-            site = "Occlusal"
+            site = "Occlusal Caries"
         elif rel_y > 0.65:
-            site = "Cervical / Root"
+            site = "Cervical / Root Caries"
         else:
-            site = "Proximal (Interproximal)"
+            site = "Proximal Caries"
 
         # Severity estimation based on lesion extent and penetration depth
         max_dim = max(w, h)

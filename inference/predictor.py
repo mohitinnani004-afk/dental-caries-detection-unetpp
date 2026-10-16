@@ -206,12 +206,13 @@ class CariesPredictor:
             draw.rectangle([x - 2, y - 2, x + bw + 2, y + bh + 2], outline=col, width=2)
 
             # Badge text
-            badge_text = f"#{lesion.id} {lesion.site.split()[0]} ({int(lesion.confidence * 100)}%)"
+            badge_text = f"Caries #{lesion.id} ({int(lesion.confidence * 100)}%)"
 
             # Badge background
             tag_y = max(4, y - 18)
-            draw.rectangle([x - 2, tag_y, x + min(bw + 60, 140), tag_y + 16], fill=(20, 20, 25))
-            draw.rectangle([x - 2, tag_y, x + min(bw + 60, 140), tag_y + 16], outline=col, width=1)
+            tag_w = max(bw + 20, 140)
+            draw.rectangle([x - 2, tag_y, x + tag_w, tag_y + 16], fill=(20, 20, 25))
+            draw.rectangle([x - 2, tag_y, x + tag_w, tag_y + 16], outline=col, width=1)
             draw.text((x + 2, tag_y + 1), badge_text, fill=(255, 255, 255))
 
         return overlay

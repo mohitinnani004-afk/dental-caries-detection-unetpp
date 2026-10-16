@@ -324,13 +324,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function populateLesionTable(lesions) {
     lesionTableBody.innerHTML = '';
-    lesionFindingsCount.textContent = `Showing ${lesions.length} lesion${lesions.length === 1 ? '' : 's'}`;
+    lesionFindingsCount.textContent = lesions.length === 0 ? 'No caries detected' : `Showing ${lesions.length} caries detection${lesions.length === 1 ? '' : 's'}`;
 
     if (lesions.length === 0) {
       const emptyRow = document.createElement('tr');
       emptyRow.innerHTML = `
         <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 24px;">
-          ✓ No radiolucent caries lesions detected above probability threshold ${state.currentThreshold.toFixed(2)}.
+          ✓ No radiolucent caries detected above probability threshold ${state.currentThreshold.toFixed(2)}.
         </td>
       `;
       lesionTableBody.appendChild(emptyRow);
@@ -349,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       row.innerHTML = `
         <td><strong>#${lesion.id}</strong></td>
-        <td>${lesion.site}</td>
+        <td><strong>${lesion.site}</strong></td>
         <td><span class="tag-severity ${tagClass}">${lesion.severity_grade}</span></td>
         <td><strong>${Math.round(lesion.confidence * 100)}%</strong></td>
         <td>${lesion.estimated_area_mm2} mm²</td>
