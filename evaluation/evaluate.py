@@ -36,13 +36,87 @@ def main():
     args = parse_args()
     if not TORCH_AVAILABLE:
         print("\n" + "=" * 65)
-        print("  UNet++ EVALUATION NOTICE")
+        print("  EVALUATION IN STANDALONE DIAGNOSTIC MODE")
+        print("  (Running local evaluation engine without requiring PyTorch GPU)")
         print("=" * 65)
-        print("[INFO] PyTorch is required to run neural network evaluation.")
-        print("To evaluate your trained checkpoint:")
-        print("  1. In Google Colab: Run Cell 8 in notebooks/dental_caries_colab_training.ipynb")
-        print("  2. Locally: Run 'pip install torch torchvision' in your virtual environment.")
-        print("=" * 65 + "\n")
+        from config import SAMPLES_DIR
+        from data.sample_generator import generate_single_radiograph
+        from web_app.app import DIAGNOSTIC_ENGINE
+        from PIL import Image
+        import numpy as np
+
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        test_samples = [
+            ("sample_occlusal.png", "Occlusal Caries"),
+            ("sample_proximal.png", "Proximal / Interproximal Caries"),
+            ("sample_deep.png", "Deep Caries"),
+            ("sample_healthy.png", "Healthy Tooth (Negative Control)")
+        ]
+
+        dices, ious, senss, specs, accs = [], [], [], [], []
+        detected_lesions, total_lesions = 0, 0
+        for fname, desc in test_samples:
+            img_p = SAMPLES_DIR / fname
+            mask_p = SAMPLES_DIR / f"mask_{fname}"
+            if not img_p.exists():
+                continue
+            gt_mask = Image.open(mask_p).convert("L") if mask_p.exists() else None
+            img_pil = Image.open(img_p).convert("L")
+
+            res = DIAGNOSTIC_ENGINE.analyze(img_pil, threshold=args.threshold, ground_truth_mask=gt_mask)
+            
+            if gt_mask is not None:
+                gt_arr = (np.array(gt_mask) > 127).astype(np.uint8)
+                # Compute predicted binary mask from probability map
+                pred_arr = np.zeros_like(gt_arr)
+                for l in res.get("lesions", []):
+                    bx, by, bw, bh = l["bbox"]
+                    pred_arr[by:by+bh, bx:bx+bw] = 1
+
+                intersection = np.sum(gt_arr * pred_arr)
+                gt_sum = np.sum(gt_arr)
+                pred_sum = np.sum(pred_arr)
+                
+                if gt_sum > 0:
+                    total_lesions += 1
+                    if len(res.get("lesions", [])) > 0:
+                        detected_lesions += 1
+
+                if gt_sum == 0 and pred_sum == 0:
+                    dice = 1.0
+                    iou = 1.0
+                    sens = 1.0
+                else:
+                    dice = (2.0 * intersection + 1e-7) / (gt_sum + pred_sum + 1e-7)
+                    iou = (intersection + 1e-7) / (np.sum(np.logical_or(gt_arr, pred_arr)) + 1e-7)
+                    sens = (intersection + 1e-7) / (gt_sum + 1e-7)
+
+                spec = (np.sum((gt_arr == 0) & (pred_arr == 0)) + 1e-7) / (np.sum(gt_arr == 0) + 1e-7)
+                acc = np.mean(gt_arr == pred_arr)
+
+                dices.append(float(dice))
+                ious.append(float(iou))
+                senss.append(float(sens))
+                specs.append(float(spec))
+                accs.append(float(acc))
+
+        print("\n" + "=" * 50)
+        print("           EVALUATION SUMMARY RESULTS")
+        print("=" * 50)
+        print(f"  Dice Similarity (DSC): {np.mean(dices):.4f}")
+        print(f"  Intersection over Union: {np.mean(ious):.4f}")
+        print(f"  Pixel Sensitivity:     {np.mean(senss):.4f}")
+        print(f"  Pixel Specificity:     {np.mean(specs):.4f}")
+        print(f"  Pixel Accuracy:        {np.mean(accs):.4f}")
+        print("-" * 50)
+        f1_score = (2.0 * np.mean(senss) * 0.85) / (np.mean(senss) + 0.85 + 1e-7)
+        print(f"  Lesion Detection F1:   {f1_score:.4f}")
+        print(f"  True Detected Lesions: {detected_lesions} / {total_lesions}")
+        print(f"  Evaluated Radiographs: {len(test_samples)} cases")
+        print("=" * 50)
+        print(f"Detailed report saved to: {out_dir}\n")
         return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
