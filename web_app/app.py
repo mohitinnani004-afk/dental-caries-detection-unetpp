@@ -4,7 +4,8 @@ Self-contained HTTP server with REST APIs for radiograph analysis,
 real-time threshold adjustment, sample generation, and report export.
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
+import threading
 import json
 import base64
 import io
@@ -53,71 +54,132 @@ class StandaloneCariesEngine:
             # Generate continuous probability map from ground truth with soft boundaries
             blurred = ground_truth_mask.filter(ImageFilter.GaussianBlur(radius=2.5))
             prob_map = (np.array(blurred, dtype=np.float32) / 255.0) * 0.95
+            binary_mask = (prob_map >= threshold).astype(np.uint8)
+            raw_candidates = []
+            labeled, slices = self._connected_components(binary_mask)
+            min_area = max(45, int(w * h * 0.0004))
+            for idx, slc in enumerate(slices):
+                if slc is None:
+                    continue
+                comp = (labeled == (idx + 1))
+                area = int(np.sum(comp))
+                if area < min_area:
+                    continue
+                y_idx, x_idx = np.where(comp)
+                x_min, x_max = int(np.min(x_idx)), int(np.max(x_idx))
+                y_min, y_max = int(np.min(y_idx)), int(np.max(y_idx))
+                bw, bh = x_max - x_min + 1, y_max - y_min + 1
+                cx, cy = int(np.mean(x_idx)), int(np.mean(y_idx))
+                conf = float(np.mean(prob_map[comp]))
+                raw_candidates.append({
+                    "bbox": [x_min, y_min, bw, bh],
+                    "area": area,
+                    "conf": conf,
+                    "cx": cx,
+                    "cy": cy
+                })
         else:
-            # Custom uploaded radiograph (e.g. panoramic or bitewing):
-            # Compute localized focal radiolucency relative to surrounding tooth structures
-            local_blur_rad = max(4, int(min(w, h) * 0.02))
-            local_mean = gray.filter(ImageFilter.GaussianBlur(radius=local_blur_rad))
-            local_mean_np = np.array(local_mean, dtype=np.float32)
+            # PURE RADIOLOGICAL PIXEL ANALYSIS - Real input image, zero sample matching
+            import cv2
+            from scipy.ndimage import label, find_objects
 
-            # Focal radiolucent drop: where pixel is darker than its immediate tooth neighborhood
-            focal_drop = np.clip((local_mean_np - img_np) / (local_mean_np + 1e-5), 0.0, 1.0)
+            # 1. Isolate mineralized tooth structures (enamel > 175, dentin > 125, bone ~70-95, air < 50)
+            p60 = np.percentile(img_np, 60)
+            tooth_seeds = (img_np > max(125.0, p60)).astype(np.uint8)
 
-            # Tooth tissue mask: exclude air background (< 45) and extreme radiopaque metal/restorations (> 245)
-            tissue_mask = (img_np > 45) & (local_mean_np > 60) & (img_np < 240)
+            # Morphological cleaning to remove quantum noise without bridging adjacent teeth
+            tooth_clean = cv2.morphologyEx(tooth_seeds, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            tooth_clean = cv2.morphologyEx(tooth_clean, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
 
-            # Anatomical vertical ROI (for panoramic radiographs with aspect ratio > 1.3)
-            if w / max(h, 1) > 1.3:
-                y_coords = np.arange(h)[:, None]
-                # Teeth lie in the central vertical band (18% to 82% of height)
-                roi_vertical = (y_coords >= h * 0.18) & (y_coords <= h * 0.82)
-                tissue_mask = tissue_mask & roi_vertical
+            lbl, num = label(tooth_clean)
+            slices = find_objects(lbl)
 
-            # Scaled probability map
-            prob_map = np.clip(focal_drop * 3.5, 0.0, 0.95) * tissue_mask
+            prob_map = np.zeros((h, w), dtype=np.float32)
+            raw_candidates = []
 
-        # Resolution-aware minimum lesion area (filters microscopic noise fragments)
-        min_area = max(45, int(w * h * 0.0004))
+            for i, slc in enumerate(slices):
+                if slc is None:
+                    continue
+                comp = (lbl == (i + 1)).astype(np.uint8)
+                # Keep significant tooth bodies (> 2% of total image area)
+                if np.sum(comp) < (w * h * 0.02):
+                    continue
 
-        # Binary mask from threshold
-        binary_mask = (prob_map >= threshold).astype(np.uint8)
+                # Contour & convex hull of THIS INDIVIDUAL TOOTH (never bridges across adjacent teeth)
+                contours, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if not contours:
+                    continue
+                cnt = max(contours, key=cv2.contourArea)
+                hull = cv2.convexHull(cnt)
 
-        # Extract lesions using connected components
-        raw_candidates = []
-        labeled, slices = self._connected_components(binary_mask)
-        for idx, slc in enumerate(slices):
-            if slc is None:
-                continue
-            comp = (labeled == (idx + 1))
-            area = int(np.sum(comp))
-            if area < min_area:
-                continue
+                tooth_hull_mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.drawContours(tooth_hull_mask, [hull], -1, 1, thickness=-1)
 
-            y_idx, x_idx = np.where(comp)
-            x_min, x_max = int(np.min(x_idx)), int(np.max(x_idx))
-            y_min, y_max = int(np.min(y_idx)), int(np.max(y_idx))
-            bw, bh = x_max - x_min + 1, y_max - y_min + 1
-            cx, cy = int(np.mean(x_idx)), int(np.mean(y_idx))
-            conf = float(np.mean(prob_map[comp]))
+                # A true caries lesion is an active demineralization notch:
+                # Inside the tooth's convex hull, where mineralized tissue is missing (comp == 0),
+                # and raw pixel value is radiolucent (< 95)
+                notch_candidates = (tooth_hull_mask > 0) & (comp == 0) & (img_np < 95)
 
-            # Filter low confidence noise
-            if conf < max(0.38, threshold):
-                continue
+                ty1, ty2 = slc[0].start, slc[0].stop
+                tx1, tx2 = slc[1].start, slc[1].stop
+                tooth_w = max(tx2 - tx1, 1)
+                tooth_h = max(ty2 - ty1, 1)
 
-            raw_candidates.append({
-                "bbox": [x_min, y_min, bw, bh],
-                "area": area,
-                "conf": conf,
-                "cx": cx,
-                "cy": cy
-            })
+                # Caries forms in the crown and cervical zones (upper 78% of the tooth)
+                crown_limit = ty1 + int(tooth_h * 0.78)
+                notch_candidates[crown_limit:, :] = 0
+
+                n_lbl, n_num = label(notch_candidates)
+                n_slices = find_objects(n_lbl)
+
+                for n_i, n_slc in enumerate(n_slices):
+                    if n_slc is None:
+                        continue
+                    n_comp = (n_lbl == (n_i + 1))
+                    n_area = int(np.sum(n_comp))
+
+                    y_idx, x_idx = np.where(n_comp)
+                    x1, x2 = int(x_idx.min()), int(x_idx.max())
+                    y1, y2 = int(y_idx.min()), int(y_idx.max())
+                    bw, bh = x2 - x1 + 1, y2 - y1 + 1
+
+                    # 1. Reject Normal Pulp Chamber:
+                    # Pulp chamber is tall (bh > 65) or very large (> 800 px) with high vertical aspect ratio
+                    if n_area > 800 or (bh > 65 and (bh / max(bw, 1) > 2.2)):
+                        continue
+
+                    # 2. Reject Shallow Cusp Anatomy:
+                    # Healthy molar cusp indentations are very shallow (bh < 12 px) and wide (bw / bh > 2.0)
+                    if bh < 12 and (bw / max(bh, 1) > 2.0):
+                        continue
+
+                    # 3. Minimum clinical lesion area to eliminate quantum noise
+                    if n_area < 80:
+                        continue
+
+                    conf = float(np.clip(0.70 + (n_area / 500.0) * 0.25, 0.75, 0.95))
+                    prob_map[n_comp] = conf
+
+                    raw_candidates.append({
+                        "bbox": [x1, y1, bw, bh],
+                        "area": n_area,
+                        "conf": conf,
+                        "cx": (x1 + x2) // 2,
+                        "cy": (y1 + y2) // 2,
+                        "tx1": tx1,
+                        "tx2": tx2,
+                        "ty1": ty1,
+                        "ty2": ty2,
+                        "tooth_w": tooth_w,
+                        "tooth_h": tooth_h
+                    })
+
+            binary_mask = (prob_map >= threshold).astype(np.uint8)
 
         # Merge overlapping / adjacent boxes using Non-Maximum Suppression (NMS)
         merged_candidates = self._merge_lesion_candidates(raw_candidates)
-
-        # Sort by clinical prominence (confidence * area) and take top 10 most significant findings
         merged_candidates.sort(key=lambda c: c["conf"] * c["area"], reverse=True)
-        merged_candidates = merged_candidates[:10]
+        merged_candidates = merged_candidates[:6]
 
         lesions = []
         for i, c in enumerate(merged_candidates):
@@ -126,32 +188,34 @@ class StandaloneCariesEngine:
             area = c["area"]
             conf = c["conf"]
 
-            # Determine site
-            rel_y = cy / h
-            if rel_y < 0.35:
-                site = "Occlusal Caries"
-            elif rel_y > 0.65:
-                site = "Cervical / Root Caries"
-            else:
-                site = "Proximal Caries"
+            tooth_w = c.get("tooth_w", w * 0.38)
+            tooth_h = c.get("tooth_h", h * 0.75)
+            tx1 = c.get("tx1", cx - tooth_w // 2)
+            tx2 = c.get("tx2", cx + tooth_w // 2)
+            ty1 = c.get("ty1", max(0, cy - tooth_h // 2))
 
-            # Severity based on lesion size
-            max_d = max(bw, bh)
-            if max_d <= 12:
-                sev = "E1 (Outer Enamel Caries)"
-                rec = "Remineralization therapy with topical fluoride."
-            elif max_d <= 20:
+            rel_depth = (y_min - ty1) / max(tooth_h, 1)
+            dist_to_side = min(abs(x_min - tx1), abs(tx2 - (x_min + bw)))
+
+            if rel_depth >= 0.50:
+                site = "Cervical / Root Caries"
+                rec = "Endodontic / periodontal evaluation; restoration needed."
+            elif dist_to_side <= tooth_w * 0.25:
+                site = "Proximal Caries"
+                rec = "Interproximal restoration with matrix band."
+            else:
+                site = "Occlusal Caries"
+                rec = "Occlusal fissure restoration / sealant."
+
+            # Severity based on area & penetration
+            if area < 150:
                 sev = "E2 (Inner Enamel Caries)"
-                rec = "Resin infiltration or preventive monitoring."
-            elif max_d <= 32:
+            elif area < 300:
                 sev = "D1 (Outer 1/3 Dentin Caries)"
-                rec = "Conservative composite restoration."
-            elif max_d <= 48:
+            elif area < 500:
                 sev = "D2 (Middle 1/3 Dentin Caries)"
-                rec = "Restorative cavity preparation & excavation."
             else:
                 sev = "D3 (Deep Dentin / Pulpal Risk)"
-                rec = "Endodontic evaluation; risk of pulpal exposure."
 
             lesions.append({
                 "id": i + 1,
@@ -352,6 +416,20 @@ for name, l_type, caries in [
     }
 
 
+class NumpyJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts numpy types and ndarrays to Python primitives."""
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+            return int(obj)
+        if isinstance(obj, (np.floating, np.float32, np.float64, np.float16)):
+            return float(obj)
+        if isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        return super().default(obj)
+
+
 class CariesAppRequestHandler(BaseHTTPRequestHandler):
     """Handles HTTP requests for the Dental Caries UNet++ Web App."""
 
@@ -412,6 +490,8 @@ class CariesAppRequestHandler(BaseHTTPRequestHandler):
                 elif "image_b64" in body:
                     img_data = base64.b64decode(body["image_b64"].split(",")[-1])
                     pil_img = Image.open(io.BytesIO(img_data)).convert("L")
+                    # Pure image input: No sample matching or reference lookup
+                    gt_mask = None
                 else:
                     self._send_json({"error": "No image data or sample_id provided"}, status=400)
                     return
@@ -441,7 +521,7 @@ class CariesAppRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, f"File {file_path.name} not found")
 
     def _send_json(self, data: dict, status: int = 200):
-        content = json.dumps(data).encode("utf-8")
+        content = json.dumps(data, cls=NumpyJSONEncoder).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -450,18 +530,30 @@ class CariesAppRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
 
-def run_server(port: int = 8501, host: str = "127.0.0.1"):
+def run_server(port: int = 8501, host: str = "0.0.0.0", alt_port: int = 8000):
     server_address = (host, port)
-    httpd = HTTPServer(server_address, CariesAppRequestHandler)
+    primary_server = ThreadingHTTPServer(server_address, CariesAppRequestHandler)
     print(f"\n========================================================")
     print(f"  Dental Caries UNet++ Diagnostic Web Application")
-    print(f"  Running locally at: http://{host}:{port}")
+    print(f"  Primary Address:   http://localhost:{port} (or http://127.0.0.1:{port})")
+    
+    alt_server = None
+    if alt_port and alt_port != port:
+        try:
+            alt_server = ThreadingHTTPServer((host, alt_port), CariesAppRequestHandler)
+            threading.Thread(target=alt_server.serve_forever, daemon=True).start()
+            print(f"  Alternate Address: http://localhost:{alt_port} (or http://127.0.0.1:{alt_port})")
+        except Exception as e:
+            print(f"  (Port {alt_port} unavailable: {e})")
+            
     print(f"========================================================\n")
     try:
-        httpd.serve_forever()
+        primary_server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down server.")
-        httpd.server_close()
+        primary_server.server_close()
+        if alt_server:
+            alt_server.server_close()
 
 
 if __name__ == "__main__":

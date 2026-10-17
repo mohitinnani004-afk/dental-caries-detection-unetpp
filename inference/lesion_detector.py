@@ -186,9 +186,9 @@ class LesionDetector:
         rel_x = cx / img_w
 
         # Anatomical site based on vertical and horizontal dental geometry
-        if rel_y < 0.32:
+        if rel_y < 0.23:
             site = "Occlusal Caries"
-        elif rel_y > 0.65:
+        elif rel_y > 0.55:
             site = "Cervical / Root Caries"
         else:
             site = "Proximal Caries"
